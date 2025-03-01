@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	. "github.com/tigerbeetle/tigerbeetle-go"
 	. "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
@@ -27,12 +28,14 @@ func main() {
 	var lastTransferId int
 	flag.IntVar(&totalAccount, "totalAccount", 10000000, "total number of accounts")
 	flag.IntVar(&totalTransfer, "totalTransfer", 10000000, "total number of transfers")
-	flag.IntVar(&lastTransferId, "lastTransferId", 1, "last transfer ID")
+	flag.IntVar(&lastTransferId, "lastTransferId", 10000020, "last transfer ID")
 	flag.Parse()
 
 	// Set up context for graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Record the start time.
+	startTime := time.Now()
 
 	// Listen for OS interrupt signals.
 	sigCh := make(chan os.Signal, 1)
@@ -173,8 +176,13 @@ func main() {
 	// Wait for all workers to finish.
 	wg.Wait()
 
+	// Calculate and log elapsed time.
+	elapsed := time.Since(startTime)
+
 	log.Println("Transfer Complete",
 		"total transfers processed=", totalTransfer,
 		"success=", atomic.LoadInt64(&totalSuccess),
-		"errors=", atomic.LoadInt64(&totalError))
+		"errors=", atomic.LoadInt64(&totalError),
+		"time=", elapsed,
+	)
 }
