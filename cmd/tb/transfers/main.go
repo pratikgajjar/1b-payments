@@ -27,7 +27,7 @@ func main() {
 	var lastTransferId int
 	flag.IntVar(&totalAccount, "totalAccount", 10000000, "total number of accounts")
 	flag.IntVar(&totalTransfer, "totalTransfer", 10000000, "total number of transfers")
-	flag.IntVar(&lastTransferId, "lastTransferId", 10000020, "last transfer ID")
+	flag.IntVar(&lastTransferId, "lastTransferId", 1, "last transfer ID")
 	flag.Parse()
 
 	// Set up context for graceful shutdown.

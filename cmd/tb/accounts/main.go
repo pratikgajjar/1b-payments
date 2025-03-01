@@ -1,14 +1,25 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"time"
 
 	. "github.com/tigerbeetle/tigerbeetle-go"
 	. "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
 )
 
 func main() {
-	tbAddress := "3000"
+	// Define command-line flags.
+	var tbAddress string
+	var startAt, endAt, batchSize int
+	flag.StringVar(&tbAddress, "tbAddress", "3000", "TigerBeetle server address")
+	flag.IntVar(&startAt, "startAt", 1, "Starting account ID (inclusive)")
+	flag.IntVar(&endAt, "endAt", 10000000, "Ending account ID (exclusive)")
+	flag.IntVar(&batchSize, "batchSize", 8190, "Batch size for account creation")
+	flag.Parse()
+
+	// Create a TigerBeetle client.
 	client, err := NewClient(ToUint128(0), []string{tbAddress})
 	if err != nil {
 		log.Printf("Error creating client: %s", err)
@@ -16,33 +27,39 @@ func main() {
 	}
 	defer client.Close()
 
-	accounts := []Account{}
+	// Record the start time.
+	startTime := time.Now()
 
-	startAt := 1
-	endAt := 10_000_000
-
-	for i := startAt; i < endAt; i++ {
+	// Create accounts.
+	var accounts []Account
+	for i := startAt; i <= endAt; i++ {
 		acc := Account{
-			ID:     ToUint128(uint64(i + 1)),
+			ID:     ToUint128(uint64(i)),
 			Ledger: 20,
 			Code:   2,
 		}
 		accounts = append(accounts, acc)
 	}
 
-	BATCH_SIZE := 8190
-	for i := 0; i < len(accounts); i += BATCH_SIZE {
-		size := BATCH_SIZE
-		if i+BATCH_SIZE > len(accounts) {
+	success := 0
+	failed := 0
+	// Process accounts in batches.
+	for i := 0; i < len(accounts); i += batchSize {
+		size := batchSize
+		if i+batchSize > len(accounts) {
 			size = len(accounts) - i
 		}
-		log.Println(accounts[i])
 		accountErrors, err := client.CreateAccounts(accounts[i : i+size])
 		if err != nil {
-			log.Println(err)
+			log.Printf("Error in batch starting with account %v: %s", accounts[i], err)
 		}
-		_, _ = accountErrors, err // Error handling omitted.
+		failed += len(accountErrors)
+		success += size - len(accountErrors)
+		// For brevity, error handling for individual account errors is omitted.
+		_, _ = accountErrors, err
 	}
 
-	log.Println("Created 1M")
+	// Calculate and log elapsed time.
+	elapsed := time.Since(startTime)
+	log.Printf("Created accounts from %d to %d (total: %d, failed: %d). Time taken: %s", startAt, endAt, success, failed, elapsed)
 }
