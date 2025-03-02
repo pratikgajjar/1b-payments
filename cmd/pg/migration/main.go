@@ -57,4 +57,11 @@ func main() {
 	resp, err = con.Exec(ctx, transferDDL)
 	log.Println(resp, err)
 
+	createIdx := `
+    CREATE INDEX ON transfers (debit_account_id);
+    CREATE INDEX ON transfers (credit_account_id);
+  `
+	resp, err = con.Exec(ctx, createIdx)
+	log.Println(resp, err)
+
 }
