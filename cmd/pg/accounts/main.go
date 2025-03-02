@@ -39,7 +39,7 @@ func main() {
 	flag.IntVar(&totalAccounts, "totalAccounts", 10_000_000, "Total accounts")
 	flag.IntVar(&batchSize, "batchSize", 8190, "Batch size")
 	flag.IntVar(&concurrency, "concurrency", 4, "Concurrency")
-	flag.StringVar(&connStr, "connStr", "postgres://user:pass@localhost:5432/db", "PostgreSQL URL")
+	flag.StringVar(&connStr, "connStr", "postgres://myuser:mypassword@localhost:5432/mydatabase", "PostgreSQL URL")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
