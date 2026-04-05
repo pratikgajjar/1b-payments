@@ -16,173 +16,96 @@ import (
 	. "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
 )
 
-var (
-	BATCH_SIZE  int = 8190
-	concurrency int = 2 // number of worker goroutines processing batches concurrently
-)
-
 func main() {
-	// Parse command-line flags.
-	var totalAccount int
-	var totalTransfer int
-	var lastTransferId int
-	flag.IntVar(&totalAccount, "totalAccount", 10000000, "total number of accounts")
-	flag.IntVar(&totalTransfer, "totalTransfer", 10000000, "total number of transfers")
-	flag.IntVar(&lastTransferId, "lastTransferId", 0, "last transfer ID")
+	var totalAccount, totalTransfer, lastTransferId, concurrency, batchSize int
+	var tbAddress string
+	flag.IntVar(&totalAccount, "totalAccount", 10_000_000, "total accounts")
+	flag.IntVar(&totalTransfer, "totalTransfer", 1_000_000, "total transfers")
+	flag.IntVar(&lastTransferId, "lastTransferId", 0, "last transfer id")
+	flag.IntVar(&concurrency, "concurrency", 1, "worker goroutines")
+	flag.IntVar(&batchSize, "batchSize", 8190, "batch size")
+	flag.StringVar(&tbAddress, "tbAddress", "3000", "tigerbeetle address")
 	flag.Parse()
 
-	// Set up context for graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Record the start time.
 	startTime := time.Now()
 
-	// Listen for OS interrupt signals.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal: %s. Initiating graceful shutdown...", sig)
-		cancel()
-	}()
+	go func() { <-sigCh; cancel() }()
 
-	// Initialize TigerBeetle client.
-	tbAddress := "3000"
 	client, err := NewClient(ToUint128(0), []string{tbAddress})
-	if err != nil {
-		log.Printf("Error creating client: %s", err)
-		return
-	}
+	if err != nil { log.Fatalf("client: %v", err) }
 	defer client.Close()
 
-	// Calculate boundaries.
 	top20 := int(float64(totalAccount) * 0.2)
-	if top20 < 1 {
-		top20 = 1
-	}
+	if top20 < 1 { top20 = 1 }
 	bottom80 := totalAccount - top20
 
-	// Channels for streaming transfers and batches.
-	transferCh := make(chan Transfer, 1000)       // buffered channel for transfers
-	batchCh := make(chan []Transfer, concurrency) // buffered channel for batches
+	transferCh := make(chan Transfer, 1000)
+	batchCh := make(chan []Transfer, concurrency)
 
-	var totalError int64
-	var totalSuccess int64
+	var totalErr, totalOK int64
 
-	// Producer: generate transfers without storing all in memory.
 	go func() {
 		defer close(transferCh)
-		// 80% of transactions: debit from top 20 accounts randomly.
 		count80 := int(float64(totalTransfer) * 0.8)
-		for i := 0; i < count80; i++ {
-			// Check for shutdown signal.
+		for i := 0; i < totalTransfer; i++ {
 			select {
-			case <-ctx.Done():
-				log.Println("Producer received shutdown signal")
-				return
+			case <-ctx.Done(): return
 			default:
 			}
-			t := Transfer{
+			var deb, cred uint64
+			if i < count80 {
+				deb = uint64(rand.Intn(top20) + 1)
+			} else {
+				deb = uint64(rand.Intn(bottom80) + top20 + 1)
+			}
+			cred = uint64(rand.Intn(totalAccount) + 1)
+			transferCh <- Transfer{
 				ID:              ToUint128(uint64(i + lastTransferId + 1)),
-				DebitAccountID:  ToUint128(uint64(rand.Intn(top20) + 1)),        // random account from 1 to top20
-				CreditAccountID: ToUint128(uint64(rand.Intn(totalAccount) + 1)), // random account from 1 to totalAccount
+				DebitAccountID:  ToUint128(deb),
+				CreditAccountID: ToUint128(cred),
 				Amount:          ToUint128(1000),
 				Ledger:          20,
 				Code:            1,
 			}
-			transferCh <- t
-		}
-		// 20% of transactions: debit from bottom 80 accounts randomly.
-		for i := count80; i < totalTransfer; i++ {
-			select {
-			case <-ctx.Done():
-				log.Println("Producer received shutdown signal")
-				return
-			default:
-			}
-			t := Transfer{
-				ID:              ToUint128(uint64(i + lastTransferId + 1)),
-				DebitAccountID:  ToUint128(uint64(rand.Intn(bottom80) + top20 + 1)), // random account from top20+1 to totalAccount
-				CreditAccountID: ToUint128(uint64(rand.Intn(totalAccount) + 1)),     // random account from 1 to totalAccount
-				Amount:          ToUint128(500),
-				Ledger:          20,
-				Code:            1,
-			}
-			transferCh <- t
 		}
 	}()
 
-	// Batch collector: group transfers into batches.
 	go func() {
 		defer close(batchCh)
-		batch := make([]Transfer, 0, BATCH_SIZE)
-		for {
-			select {
-			case <-ctx.Done():
-				log.Println("Batch collector received shutdown signal")
-				return
-			case t, ok := <-transferCh:
-				if !ok {
-					// Send any remaining transfers.
-					if len(batch) > 0 {
-						b := make([]Transfer, len(batch))
-						copy(b, batch)
-						batchCh <- b
-					}
-					return
-				}
-				batch = append(batch, t)
-				if len(batch) == BATCH_SIZE {
-					b := make([]Transfer, BATCH_SIZE)
-					copy(b, batch)
-					batchCh <- b
-					batch = batch[:0]
-				}
+		batch := make([]Transfer, 0, batchSize)
+		for t := range transferCh {
+			batch = append(batch, t)
+			if len(batch) == batchSize {
+				b := make([]Transfer, batchSize)
+				copy(b, batch)
+				batchCh <- b
+				batch = batch[:0]
 			}
 		}
+		if len(batch) > 0 { batchCh <- batch }
 	}()
 
-	// Worker pool: process each batch concurrently.
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go func(workerID int) {
+		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					log.Printf("Worker %d received shutdown signal", workerID)
-					return
-				case batch, ok := <-batchCh:
-					if !ok {
-						return
-					}
-					transferErrors, err := client.CreateTransfers(batch)
-					if err != nil {
-						log.Printf("Worker %d error: %s", workerID, err)
-					}
-					if len(transferErrors) > 0 {
-						log.Printf("Worker %d transfer errors: %v", workerID, transferErrors)
-						atomic.AddInt64(&totalError, int64(len(transferErrors)))
-						atomic.AddInt64(&totalSuccess, int64(len(batch)-len(transferErrors)))
-					} else {
-						atomic.AddInt64(&totalSuccess, int64(len(batch)))
-					}
-				}
+			for batch := range batchCh {
+				errs, err := client.CreateTransfers(batch)
+				if err != nil { log.Printf("error: %v", err) }
+				atomic.AddInt64(&totalErr, int64(len(errs)))
+				atomic.AddInt64(&totalOK, int64(len(batch)-len(errs)))
 			}
-		}(i)
+		}()
 	}
-
-	// Wait for all workers to finish.
 	wg.Wait()
 
-	// Calculate and log elapsed time.
 	elapsed := time.Since(startTime)
-
-	log.Println("Transfer Complete",
-		"total transfers processed=", totalTransfer,
-		"success=", atomic.LoadInt64(&totalSuccess),
-		"errors=", atomic.LoadInt64(&totalError),
-		"time=", elapsed,
-	)
+	rps := float64(totalOK) / elapsed.Seconds()
+	log.Printf("done: ok=%d err=%d time=%s RPS=%.0f",
+		totalOK, totalErr, elapsed.Round(time.Millisecond), rps)
 }
