@@ -1,0 +1,25 @@
+// Trace io_uring submission → completion latency
+// per opcode, in microseconds
+
+tracepoint:io_uring:io_uring_submit_req
+{
+  @start[args->user_data] = nsecs;
+  @op[args->user_data] = args->opcode;
+  @submits = count();
+  @per_op[args->op_str] = count();
+}
+
+tracepoint:io_uring:io_uring_complete
+/ @start[args->user_data] != 0 /
+{
+  $lat = (nsecs - @start[args->user_data]) / 1000;
+  @latency_us = hist($lat);
+  @completions = count();
+  delete(@start[args->user_data]);
+  delete(@op[args->user_data]);
+}
+
+END {
+  clear(@start);
+  clear(@op);
+}
